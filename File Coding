@@ -1,0 +1,690 @@
+import pygame
+import sys
+from abc import ABC, abstractmethod
+
+pygame.init()
+pygame.mixer.init()
+
+WIDTH = 900
+HEIGHT = 500
+
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("Super Mario")
+
+easy_btn   = pygame.Rect(75, 140, 250, 90)
+medium_btn = pygame.Rect(325, 140, 250, 90)
+hard_btn   = pygame.Rect(585, 140, 250, 90)
+play_btn = pygame.Rect(310, 325, 280, 85)
+
+clock = pygame.time.Clock()
+
+WHITE = (255, 255, 255)
+BLACK = (0, 0, 0)
+BLUE = (100, 149, 237)
+RED = (255, 0, 0)
+GREEN = (0, 200, 0)
+ORANGE = (255, 165, 0)
+YELLOW = (255, 220, 0)
+GRAY = (180, 180, 180)
+
+font = pygame.font.SysFont(None, 55)
+font_small = pygame.font.SysFont(None, 35)
+font_big = pygame.font.SysFont(None, 75)
+
+state = "menu_awal"
+WORLD_WIDTH = 4000
+
+menu_awal = pygame.transform.scale(pygame.image.load("img/menu_awal.png"), (WIDTH, HEIGHT))
+menu_level = pygame.transform.scale(pygame.image.load("img/menu_level.png"), (WIDTH, HEIGHT))
+bg = pygame.transform.scale(pygame.image.load("img/bg.png"), (WIDTH, HEIGHT))
+MARIO_IDLE = [
+    pygame.transform.scale(pygame.image.load("img/mario1.png"), (45,55))
+]
+MARIO_WALK = [
+    pygame.transform.scale(pygame.image.load("img/mario2.png"), (45,55)),
+    pygame.transform.scale(pygame.image.load("img/mario3.png"), (45,55)),
+    pygame.transform.scale(pygame.image.load("img/mario4.png"), (45,55)),
+    pygame.transform.scale(pygame.image.load("img/mario5.png"), (45,55))
+]
+MARIO_JUMP = [
+    pygame.transform.scale(pygame.image.load("img/mario6.png"), (45,55))
+]
+BLOCK = pygame.transform.scale(pygame.image.load("img/block.png"), (75, 45))
+COIN = pygame.transform.scale(pygame.image.load("img/coin.png"), (30, 30))
+PIPE = pygame.transform.scale(pygame.image.load("img/pipe.png"), (70, 150))
+mushroom_img = pygame.transform.scale(pygame.image.load("img/mushroom.png"), (40, 40))
+alien_img = pygame.transform.scale(pygame.image.load("img/alien.png"), (45, 40))
+HOUSE = pygame.transform.scale(pygame.image.load("img/house.png"), (190, 190))
+enemy_terbang = pygame.transform.scale(pygame.image.load("img/meteors.png"), (50, 50))
+youwin = pygame.transform.scale(pygame.image.load("img/youwin.png"), (500, 500))
+gameover = pygame.transform.scale(pygame.image.load("img/game-over.png"), (500, 250))
+playagain = pygame.transform.scale(pygame.image.load("img/playagain.png"), (200, 100))
+exit_png = pygame.transform.scale(pygame.image.load("img/exit.png"), (200, 100))
+star = pygame.transform.scale(pygame.image.load("img/star.png"), (35, 35))
+
+play_again_rect = playagain.get_rect(center=(350, 290))
+exit_rect = exit_png.get_rect(center=(550, 290))
+
+
+sound_coin = pygame.mixer.Sound("img/coin1.mp3")
+sound_kalah = pygame.mixer.Sound("img/soundgameover.wav")
+sound_menang = pygame.mixer.Sound("img/menang.wav")
+sound_nabrak = pygame.mixer.Sound("img/nabrak.wav")
+sound_click = pygame.mixer.Sound("img/soundclick.wav")
+Sound_main = pygame.mixer.Sound("img/soundmain.mp3")
+Sound_menu = pygame.mixer.Sound("img/soundbegin.mp3")
+pygame.mixer.music.load("img/soundbegin.mp3")
+pygame.mixer.music.play(-1)
+GROUND_Y = HEIGHT - 75
+
+
+class Camera:
+    def __init__(self, world_width):
+        self.offset_x = 0
+        self.world_width = world_width
+
+    def update(self, player):
+        target = player.rect.centerx - WIDTH // 3
+        self.offset_x = max(0, min(target, self.world_width - WIDTH))
+
+    def apply(self, rect):
+        return pygame.Rect(rect.x - self.offset_x, rect.y, rect.width, rect.height)
+
+
+class GameObject(ABC):
+    def __init__(self, image, x, y):
+        self.image = image
+        self.rect = self.image.get_rect(topleft=(x, y))
+
+    @abstractmethod
+    def draw(self, surface, camera):
+        pass
+
+
+
+class Enemy(GameObject):
+    def __init__(self, image, x, y, left_b, right_b, speed):
+        super().__init__(image, x, y)
+        self.speed = speed
+        self.left_bound = left_b
+        self.right_bound = right_b
+
+    def move(self, pipes=None):
+        self.rect.x += self.speed
+        if self.rect.x <= self.left_bound or self.rect.x >= self.right_bound:
+            self.speed *= -1
+
+    def hit_player(self, player):
+        if not player.invincible and player.rect.colliderect(self.rect):
+            player.lives -= 1
+
+            if player.lives > 0:
+                sound_nabrak.play()
+            player.invincible = True
+            player.invincible_timer = 90
+            player.rect.x = 100
+            player.rect.y = GROUND_Y - 80
+
+    def draw(self, surface, camera):
+        img = self.image if self.speed > 0 else pygame.transform.flip(self.image, True, False)
+        surface.blit(img, camera.apply(self.rect))
+
+
+class Item(GameObject):
+    def __init__(self, image, x, y):
+        super().__init__(image, x, y)
+        self.used = False
+
+    @abstractmethod
+    def collect(self, player):
+        pass
+
+    def is_used(self):
+        return self.used
+
+class Player:
+    def __init__(self, x, y, lives=3):
+
+        self.animations = {
+            "idle": MARIO_IDLE,
+            "walk": MARIO_WALK,
+            "jump": MARIO_JUMP
+        }
+
+        self.state = "idle"
+        self.frame = 0
+        self.animation_speed = 0.15
+
+        self.image = self.animations["idle"][0]
+        self.rect = self.image.get_rect(topleft=(x, y))
+        self.speed = 5
+        self.jump = False
+        self.jump_power = 16
+        self.gravity = 0.6
+        self.velocity_y = 0
+        self.lives = lives
+        self.__score = 0
+        self.invincible = False
+        self.invincible_timer = 0
+        self.facing_right = True
+
+    def get_score(self):
+        return self.__score
+
+    def add_score(self, amount):
+        if amount > 0:
+            self.__score += amount
+
+    def animate(self):
+        self.frame += self.animation_speed
+
+        if self.frame >= len(self.animations[self.state]):
+            self.frame = 0
+
+        self.image = self.animations[self.state][int(self.frame)]
+
+
+    def update(self, platforms):
+        self.velocity_y += self.gravity
+        self.rect.y += self.velocity_y
+
+        if self.invincible:
+            self.invincible_timer -= 1
+            if self.invincible_timer <= 0:
+                self.invincible = False
+
+        for plat in platforms:
+            if self.rect.colliderect(plat.rect):
+                if self.velocity_y > 0 and self.rect.bottom - self.velocity_y <= plat.rect.top + 5:
+                    self.rect.bottom = plat.rect.top
+                    self.jump = False
+                    self.velocity_y = 0
+                elif self.velocity_y < 0 and self.rect.top - self.velocity_y >= plat.rect.bottom - 5:
+                    self.rect.top = plat.rect.bottom
+                    self.velocity_y = 0
+
+        if self.rect.y > HEIGHT + 50:
+            self.lives -= 1
+            self.rect.x = 90
+            self.rect.y = GROUND_Y - 85
+
+        self.animate()
+
+    def move(self, platforms, world_width):
+        keys = pygame.key.get_pressed()
+        moving = False
+
+        if keys[pygame.K_LEFT]:
+            self.rect.x -= self.speed
+            self.facing_right = False
+            moving = True
+            for plat in platforms:
+                if self.rect.colliderect(plat.rect):
+                    self.rect.left = plat.rect.right
+
+        if keys[pygame.K_RIGHT]:
+            self.rect.x += self.speed
+            self.facing_right = True
+            moving = True
+            for plat in platforms:
+                if self.rect.colliderect(plat.rect):
+                    self.rect.right = plat.rect.left
+
+        if not self.jump and (keys[pygame.K_SPACE] or keys[pygame.K_UP]):
+            self.jump = True
+            self.velocity_y = -self.jump_power
+
+        if self.jump:
+            self.state = "jump"
+        elif moving:
+            self.state = "walk"
+        else:
+            self.state = "idle"
+
+        self.rect.x = max(0, min(self.rect.x, world_width - self.rect.width))
+
+    def draw(self, surface, camera):
+        if self.invincible and self.invincible_timer % 6 < 3:
+            return
+        img = self.image if self.facing_right else pygame.transform.flip(self.image, True, False)
+        surface.blit(img, camera.apply(self.rect))
+
+class Ground:
+    GROUND_H = 75
+
+    def __init__(self, world_width):
+        tile_src = pygame.image.load("img/ground.png")
+        tile_w = tile_src.get_width()
+        tile_h = tile_src.get_height()
+        scale_ratio = self.GROUND_H / tile_h
+        tile_scaled_w = max(1, int(tile_w * scale_ratio))
+        tile_scaled = pygame.transform.scale(tile_src, (tile_scaled_w, self.GROUND_H))
+
+        self.image = pygame.Surface((world_width, self.GROUND_H), pygame.SRCALPHA)
+        for x in range(0, world_width, tile_scaled_w):
+            self.image.blit(tile_scaled, (x, 0))
+
+        self.rect = pygame.Rect(0, HEIGHT - self.GROUND_H, world_width, self.GROUND_H)
+
+    def draw(self, surface, camera):
+        surface.blit(self.image, camera.apply(self.rect))
+
+
+class Pipe(GameObject):
+    PIPE_W = 70
+    PIPE_H = 150
+
+    def __init__(self, x):
+        y = GROUND_Y - self.PIPE_H
+        super().__init__(PIPE, x, y)
+
+    def draw(self, surface, camera):
+        surface.blit(self.image, camera.apply(self.rect))
+
+class Block(GameObject):
+    def __init__(self, x, y):
+        super().__init__(BLOCK, x, y)
+
+    def draw(self, surface, camera):
+        surface.blit(self.image, camera.apply(self.rect))
+
+class Coin(Item):
+    def __init__(self, x, y):
+        super().__init__(COIN, x, y)
+
+    def collect(self, player, bonus=1):
+        if not self.used and player.rect.colliderect(self.rect):
+            self.used = True
+            player.add_score(bonus)
+            sound_coin.play()
+
+    def draw(self, surface, camera):
+        if not self.used:
+            surface.blit(self.image, camera.apply(self.rect))
+
+
+class Mushroom(Item):
+    def __init__(self, x, y, left_b=None, right_b=None, speed=2):
+        super().__init__(mushroom_img, x, y)
+
+        self.speed = speed
+        self.left_bound = left_b if left_b is not None else max(0, x - 200)
+        self.right_bound = right_b if right_b is not None else x + 200
+
+    def move(self, pipes):
+        if self.used:
+            return
+        self.rect.x += self.speed
+        if self.rect.x <= self.left_bound or self.rect.x >= self.right_bound:
+            self.speed *= -1
+        for pipe in pipes:
+            if self.rect.colliderect(pipe.rect):
+                if self.speed > 0:
+                    self.rect.right = pipe.rect.left
+                else:
+                    self.rect.left = pipe.rect.right
+                self.speed *= -1
+                break
+
+    def heal(self, player):
+        if not self.used and player.rect.colliderect(self.rect):
+            player.lives += 1
+            self.used = True
+
+    def draw(self, surface, camera):
+        if not self.used:
+            img = self.image if self.speed > 0 else pygame.transform.flip(self.image, True, False)
+            surface.blit(img, camera.apply(self.rect))
+
+    def collect(self, player):
+        if not self.used and player.rect.colliderect(self.rect):
+            player.lives += 1
+            self.used = True
+
+class Alien(Enemy):
+    def __init__(self, x, y, left_b, right_b, speed=3):
+        super().__init__(alien_img, x, y, left_b, right_b, speed)
+
+    def move(self, pipes=None):
+        self.rect.x += self.speed
+        if self.rect.x <= self.left_bound or self.rect.x >= self.right_bound:
+            self.speed *= -1
+        for pipe in pipes:
+            if self.rect.colliderect(pipe.rect):
+                if self.speed > 0:
+                    self.rect.right = pipe.rect.left
+                else:
+                    self.rect.left = pipe.rect.right
+                self.speed *= -1
+                break
+
+
+class House(GameObject):
+    def __init__(self, x, y):
+        super().__init__(HOUSE, x, y)
+
+    def draw(self, surface, camera):
+        surface.blit(self.image, camera.apply(self.rect))
+
+class Meteor(Enemy):
+    def __init__(self, x, y, left_b, right_b, speed=3):
+        super().__init__(enemy_terbang, x, y, left_b, right_b, speed)
+
+
+def draw_hud(player):
+    coin_text = font_small.render(
+        f"COINS : {player.get_score()}",
+        True,
+        WHITE
+    )
+
+    screen.blit(coin_text, (20, 10))
+
+    for i in range(player.lives):
+        screen.blit(star, (WIDTH - 50 - (i * 40), 5))
+
+def overlay(text, color, sub="", image=None):
+    surf = pygame.Surface((WIDTH, HEIGHT))
+    surf.fill((0, 0, 0))
+    surf.set_alpha(170)
+    screen.blit(surf, (0, 0))
+
+    center_x = WIDTH // 2
+    center_y = HEIGHT // 2
+
+    if image:
+        img_x = center_x - image.get_width() // 2
+        img_y = center_y - image.get_height() // 2 - 40
+        screen.blit(image, (img_x, img_y))
+
+    if text:
+        t = font_big.render(text, True, color)
+        screen.blit(t, (center_x - t.get_width() // 2, center_y + 80))
+
+    if sub:
+        s = font_small.render(sub, True, RED)
+        screen.blit(s, (center_x - s.get_width() // 2, center_y))
+
+def setup_level(difficulty):
+    ground = Ground(WORLD_WIDTH)
+    platforms = [ground]
+    pipes = []
+    blocks = []
+    coins = []
+    mushrooms = []
+    aliens = []
+    meteors = []
+    houses = None
+
+    if difficulty == 1:
+
+        pipes += [
+            Pipe(400),
+            Pipe(900),
+            Pipe(1500),
+            Pipe(2100),
+            Pipe(3200),
+        ]
+
+        blocks += [
+            Block(600, 180), Block(770, 200),
+            Block(1050, 310), Block(1300, 310),
+            Block(1700, 200), Block(1775, 200), Block(1850, 200),
+            Block(2250, 290), Block(2325, 290),
+            Block(2600, 210), Block(2675, 210),
+        ]
+
+        for pipe in pipes:  platforms.append(pipe)
+        for block in blocks: platforms.append(block)
+
+        for block in blocks:
+            coins.append(Coin(block.rect.centerx - 15, block.rect.y - 40))
+
+        mushrooms += [
+            Mushroom(600, GROUND_Y - 45, 450, 850),
+            Mushroom(1300, GROUND_Y - 45, 1000, 1450),
+            Mushroom(2000, GROUND_Y - 45, 1600, 2050),
+        ]
+
+        aliens += [
+            Alien(700, GROUND_Y - 50, 430, 870, speed=2),
+            Alien(1200, GROUND_Y - 50, 950, 1470, speed=2),
+            Alien(1800, GROUND_Y - 50, 1550, 2070, speed=3),
+            Alien(2400, GROUND_Y - 50, 2150, 2670, speed=3),
+            Alien(2800, GROUND_Y - 50, 2750, 3270, speed=3),
+        ]
+
+        houses = House(WORLD_WIDTH - 200, GROUND_Y - 180)
+
+    elif difficulty == 2:
+
+        pipes += [
+            Pipe(500),
+            Pipe(1050),
+            Pipe(1550),
+            Pipe(2050),
+        ]
+
+        blocks += [
+            Block(250, 300), Block(320, 300),
+            Block(640, 220), Block(700, 220), Block(760, 220),
+            Block(880, 260), Block(940, 260),
+            Block(1200, 180), Block(1260, 180), Block(1320, 180),
+            Block(1700, 300), Block(1760, 300),
+            Block(2200, 230), Block(2260, 230),
+            Block(2750, 300), Block(2810, 300),
+            Block(3000, 220), Block(3060, 220), Block(3120, 220),
+            Block(3450, 260), Block(3510, 260),
+        ]
+
+        for pipe in pipes:  platforms.append(pipe)
+        for block in blocks: platforms.append(block)
+
+        for block in blocks:
+            coins.append(Coin(block.rect.centerx - 22, block.rect.y - 50))
+
+        mushrooms += [
+            Mushroom(720, GROUND_Y - 45),
+            Mushroom(1150, GROUND_Y - 45),
+            Mushroom(1700, GROUND_Y - 45),
+            Mushroom(2900, GROUND_Y - 45),
+        ]
+
+        aliens += [
+            Alien(1050, GROUND_Y - 50, 100, 1500, speed=3),
+            Alien(1800, GROUND_Y - 50, 1500, 2100, speed=3),
+            Alien(2300, GROUND_Y - 50, 2100, 2700, speed=4),
+            Alien(2500, GROUND_Y - 50, 2100, 2800, speed=4),
+            Alien(2900, GROUND_Y - 50, 2700, 3300, speed=4),
+            Alien(3500, GROUND_Y - 50, 3300, 3900, speed=5),
+        ]
+        meteors += [
+            Meteor(1100, 140, 900, 1500, speed=5),
+            Meteor(2800, 125, 2600, 3700, speed=6)
+        ]
+        houses = House(WORLD_WIDTH - 200, GROUND_Y - 180)
+
+    elif difficulty == 3:
+
+        pipes += [
+            Pipe(500),
+            Pipe(1500),
+            Pipe(3000),
+        ]
+        blocks += [
+            Block(250, 320), Block(310, 320),
+            Block(630, 260), Block(690, 260),
+            Block(1000, 220),
+            Block(1250, 200), Block(1310, 200),
+            Block(1750, 250), Block(1810, 250),
+            Block(2100, 220), Block(2170, 220),
+            Block(2450, 200), Block(2510, 200), Block(2580, 200),
+            Block(3200, 190), Block(3260, 190)
+        ]
+        for pipe in pipes:
+            platforms.append(pipe)
+        for block in blocks:
+            platforms.append(block)
+            coins.append(Coin(block.rect.centerx - 22, block.rect.y - 50))
+        mushrooms += [
+            Mushroom(700, GROUND_Y - 45),
+            Mushroom(2200, GROUND_Y - 45)
+        ]
+        aliens += [
+            Alien(200, GROUND_Y - 50, 0, 500, speed=5),
+            Alien(800, GROUND_Y - 50, 500, 1000, speed=6),
+            Alien(1400, GROUND_Y - 50, 1000, 1500, speed=7),
+            Alien(2000, GROUND_Y - 50, 1500, 2200, speed=6),
+            Alien(2800, GROUND_Y - 50, 2500, 3200, speed=7),
+            Alien(3100, GROUND_Y - 50, 3000, 3300, speed=7),
+        ]
+        meteors += [
+            Meteor(900, 140, 500, 1200, speed=6),
+            Meteor(1100, 140, 900, 1500, speed=7),
+            Meteor(2200, 130, 1600, 2400, speed=8),
+            Meteor(2700, 135, 2500, 3500, speed=7),
+            Meteor(3200, 145, 2200, 3800, speed=7),
+        ]
+        houses = House(WORLD_WIDTH - 200, GROUND_Y - 180)
+
+    return ground, platforms, pipes, blocks, coins, mushrooms, aliens, meteors, houses
+
+
+def start_game(difficulty):
+    global state
+    pygame.mixer.music.load("img/soundmain.mp3")
+    pygame.mixer.music.play(-1)
+
+    ground, platforms, pipes, blocks, coins, mushrooms, aliens, meteors, houses = setup_level(difficulty)
+
+    player = Player(100, GROUND_Y - 80)
+    camera = Camera(WORLD_WIDTH)
+    game_over = False
+    gameover_played = False
+    level_clear = False
+    bg_tile_w = bg.get_width()
+
+    while True:
+        clock.tick(60)
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                sound_click.play()
+                if game_over or level_clear:
+                    if play_again_rect.collidepoint(event.pos):
+                        start_game(difficulty)
+                        return
+                    elif exit_rect.collidepoint(event.pos):
+                        state = "menu_awal"
+
+                        pygame.mixer.music.stop()
+                        pygame.mixer.music.load("img/soundbegin.mp3")
+                        pygame.mixer.music.play(-1)
+
+                        return
+
+        if not game_over and not level_clear:
+            player.move(platforms, WORLD_WIDTH)
+            player.update(platforms)
+            camera.update(player)
+
+            for alien in aliens:
+                alien.move(pipes)
+                alien.hit_player(player)
+
+            for coin in coins:
+                coin.collect(player)
+
+            for mushroom in mushrooms:
+                mushroom.move(pipes)
+                mushroom.collect(player)
+
+            for meteor in meteors:
+                meteor.move()
+                meteor.hit_player(player)
+
+            if player.lives <= 0:
+                game_over = True
+
+                if not gameover_played:
+                    pygame.mixer.music.stop()
+                    sound_kalah.play()
+                    gameover_played = True
+
+            if player.rect.colliderect(houses.rect):
+                pygame.mixer.music.stop()
+                pygame.mixer.stop()
+                sound_menang.play()
+                level_clear = True
+
+        screen.fill((100, 149, 237))
+        num_tiles = (WIDTH // bg_tile_w) + 2
+        start_tile = int(camera.offset_x // bg_tile_w)
+        for i in range(start_tile, start_tile + num_tiles + 1):
+            x_pos = i * bg_tile_w - camera.offset_x
+            screen.blit(bg, (x_pos, 40))
+
+        ground.draw(screen, camera)
+
+        for plat in platforms:
+            if plat is not ground:
+                plat.draw(screen, camera)
+
+        for coin in coins: coin.draw(screen, camera)
+        for mushroom in mushrooms: mushroom.draw(screen, camera)
+        for alien in aliens: alien.draw(screen, camera)
+        for meteor in meteors: meteor.draw(screen, camera)
+
+        houses.draw(screen, camera)
+
+        player.draw(screen, camera)
+        draw_hud(player)
+
+        if game_over:
+            overlay("", RED, "", gameover)
+            screen.blit(playagain, play_again_rect)
+            screen.blit(exit_png, exit_rect)
+        elif level_clear:
+            overlay("", GREEN, "", youwin)
+            screen.blit(playagain, play_again_rect)
+            screen.blit(exit_png, exit_rect)
+
+        pygame.display.update()
+
+
+while True:
+    for ev in pygame.event.get():
+        if ev.type == pygame.QUIT:
+            pygame.quit()
+            sys.exit()
+
+        if ev.type == pygame.MOUSEBUTTONDOWN:
+
+            if state == "menu_awal":
+                if play_btn.collidepoint(ev.pos):
+                    sound_click.play()
+                    state = "pilih_level"
+
+            elif state == "pilih_level":
+                if easy_btn.collidepoint(ev.pos):
+                    sound_click.play()
+                    start_game(1)
+                elif medium_btn.collidepoint(ev.pos):
+                    sound_click.play()
+                    start_game(2)
+                elif hard_btn.collidepoint(ev.pos):
+                    sound_click.play()
+                    start_game(3)
+
+    if state == "menu_awal":
+        screen.blit(menu_awal, (0, 0))
+    elif state == "pilih_level":
+        screen.blit(menu_level, (0, 0))
+
+
+    pygame.display.update()
+    clock.tick(60)
